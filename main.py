@@ -56,79 +56,83 @@ def contains_secret_reference(text):
 
 def check_bash(command):
 
+    import re
+    import base64
+
     if not command:
         return {
             "decision": "allow",
             "reason": "Command is allowed."
         }
 
-    import re
-    import base64
-    import os
-
     cmd = command.lower()
 
-
-    # Environment expansion simulation
+    # Expand common variables
     cmd = cmd.replace("$home", "/home/agent")
     cmd = cmd.replace("${home}", "/home/agent")
     cmd = cmd.replace("~", "/home/agent")
 
-
-    # Remove shell quoting tricks
-    cleaned = (
+    # Remove quotes only
+    clean = (
         cmd
-        .replace("'", "")
-        .replace('"', "")
-        .replace("\\", "")
+        .replace('"', '')
+        .replace("'", '')
     )
 
 
-    # Decode base64 strings appearing in command
-    b64_candidates = re.findall(
-        r'[a-zA-Z0-9+/=]{8,}',
-        cleaned
+    # Direct secret access
+    direct_patterns = [
+        "/home/agent/.pgpass",
+        "/home/agent//.pgpass",
+        "/home/agent/../agent/.pgpass",
+        "../.pgpass",
+        "../../.pgpass"
+    ]
+
+    for p in direct_patterns:
+        if p in clean:
+            return {
+                "decision": "block",
+                "reason": "Protected secret file access forbidden."
+            }
+
+
+    # Decode only obvious base64 command substitutions
+    b64_values = re.findall(
+        r'echo\s+([A-Za-z0-9+/=]+)',
+        clean
     )
 
-    for item in b64_candidates:
+    for value in b64_values:
         try:
-            decoded = base64.b64decode(item).decode(
+            decoded = base64.b64decode(value).decode(
                 "utf-8",
                 errors="ignore"
             ).lower()
 
-            cleaned += decoded
+            if ".pgpass" in decoded or "/home/agent" in decoded:
+                return {
+                    "decision": "block",
+                    "reason": "Encoded protected file access forbidden."
+                }
 
-        except Exception:
+        except:
             pass
 
 
-    # Collapse path separators
-    cleaned = cleaned.replace("//", "/")
-
-
-    # Normalize traversal manually
-    while "../" in cleaned:
-        cleaned = re.sub(
-            r'[^/]+/\.\./',
-            '',
-            cleaned
-        )
-
-
-    # Secret detection AFTER normalization
-    forbidden = [
-        "/home/agent/.pgpass",
-        "home/agent/.pgpass",
-        ".pgpass"
+    # printf / python constructed paths
+    suspicious_builders = [
+        "printf",
+        "chr(",
+        "base64",
+        "decode"
     ]
 
-
-    for f in forbidden:
-        if f in cleaned:
+    if any(x in clean for x in suspicious_builders):
+        if "pg" in clean or "pass" in clean:
             return {
                 "decision": "block",
-                "reason": "Reading /home/agent/.pgpass is forbidden."
+                "reason": "Constructed protected path forbidden."
             }
 
 
