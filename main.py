@@ -56,18 +56,70 @@ def contains_secret_reference(text):
 
 def check_bash(command):
 
-    if contains_secret_reference(command):
+    if not command:
         return {
-            "decision": "block",
-            "reason": "Access to the protected secret file is forbidden."
+            "decision": "allow",
+            "reason": "Empty command."
         }
 
-    # block encoded attempts
-    if "base64" in command and ".pgpass" in command:
-        return {
-            "decision": "block",
-            "reason": "Encoded access to protected file is forbidden."
-        }
+
+    cmd = command.lower()
+
+
+    # Direct secret references
+    secret_patterns = [
+        ".pgpass",
+        "pgpass",
+        "/home/agent/.pgpass",
+        "$home/.pgpass",
+        "${home}/.pgpass",
+        "~/.pgpass",
+    ]
+
+
+    for pattern in secret_patterns:
+        if pattern in cmd:
+            return {
+                "decision": "block",
+                "reason": "Access to the protected secret file is forbidden."
+            }
+
+
+    # Detect base64 decoding attempts
+    if "base64" in cmd:
+
+        encoded_patterns = [
+            "l2hvbwvlywdlbnq",
+            "lnbnyxnt",
+            "cgdwYXNz"
+        ]
+
+        for p in encoded_patterns:
+            if p in cmd:
+                return {
+                    "decision": "block",
+                    "reason": "Encoded access to protected file is forbidden."
+                }
+
+
+    # Detect shell tricks
+    dangerous_shell = [
+        "cat $(",
+        "cat $(",
+        "python -c",
+        "python3 -c",
+        "open(",
+        "read(",
+        "subprocess",
+    ]
+
+    for item in dangerous_shell:
+        if item in cmd:
+            return {
+                "decision": "block",
+                "reason": "Possible hidden file access attempt."
+            }
+
 
     return {
         "decision": "allow",
